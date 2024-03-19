@@ -7,7 +7,7 @@ import multiprocessing as mp
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import openslide
+# import openslide
 from PIL import Image
 import pdb
 import h5py
@@ -16,10 +16,12 @@ from wsi_core.wsi_utils import savePatchIter_bag_hdf5, initialize_hdf5_bag, coor
 import itertools
 from wsi_core.util_classes import isInContourV1, isInContourV2, isInContourV3_Easy, isInContourV3_Hard, Contour_Checking_fn
 from utils.file_utils import load_pkl, save_pkl
+import tifffile
+import zarr
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
-class WholeSlideImage(object):
+class WholeSlideImageTifffile(object):
     def __init__(self, path):
 
         """
@@ -29,10 +31,21 @@ class WholeSlideImage(object):
 
 #         self.name = ".".join(path.split("/")[-1].split('.')[:-1])
         self.name = os.path.splitext(os.path.basename(path))[0]
-        self.wsi = openslide.open_slide(path)
-        self.level_downsamples = self._assertLevelDownsamples()
-        self.level_dim = self.wsi.level_dimensions
+        # self.wsi = openslide.open_slide(path)
+        # self.level_downsamples = self._assertLevelDownsamples()
+        # self.level_dim = self.wsi.level_dimensions
+
+        self.wsi = tifffile.imread(path, aszarr=True)
+        self.wsi_zarr = zarr.open(self.wsi, mode='r')       
     
+        if isinstance(self.wsi_zarr, zarr.hierarchy.Group):
+            self.level_dim = [(self.wsi_zarr[i].shape[1], self.wsi_zarr[i].shape[0]) for i in self.wsi_zarr]
+        elif isinstance(self.wsi_zarr, zarr.core.Array):
+            self.level_dim = [(self.wsi_zarr.shape[1], self.wsi_zarr.shape[0])] # level_dimensions
+
+        self.level_downsamples = self._assertLevelDownsamples()    
+        
+
         self.contours_tissue = None
         self.contours_tumor = None
         self.hdf5_file = None
@@ -142,12 +155,25 @@ class WholeSlideImage(object):
 
             return foreground_contours, hole_contours
         
-        img = np.array(self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level]))
+        # img = np.array(self.wsi.read_region((0,0), seg_level, self.level_dim[seg_level]))
+        region_width, region_height = self.level_dim[seg_level]        
+        
+        if isinstance(self.wsi_zarr, zarr.hierarchy.Group):
+            img = self.wsi_zarr[seg_level][0:region_height, 0:region_width, :]
+        elif isinstance(self.wsi_zarr, zarr.core.Array):
+            img = self.wsi_zarr[0:region_height, 0:region_width, :]
+        
+        # TODO
+        if len(img.shape) == 3 and img.shape[0] == 3:
+            img = np.transpose(img, [1, 2, 0])
+            cvuint8 = cv2.convertScaleAbs(image)
+        
+
         img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
         img_med = cv2.medianBlur(img_hsv[:,:,1], mthresh)  # Apply median blurring
         
        
-        # Thresholding
+        # Thresholding        
         if use_otsu:
             _, img_otsu = cv2.threshold(img_med, 0, sthresh_up, cv2.THRESH_OTSU+cv2.THRESH_BINARY)
         else:
@@ -164,8 +190,8 @@ class WholeSlideImage(object):
         filter_params['a_t'] = filter_params['a_t'] * scaled_ref_patch_area
         filter_params['a_h'] = filter_params['a_h'] * scaled_ref_patch_area
         
-        # Find and filter contours
-        contours, hierarchy = cv2.findContours(img_otsu, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE) # Find contours 
+        # Find and filter contours                
+        contours, hierarchy = cv2.findContours(img_otsu, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE) # Find contours         
         hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
         if filter_params: foreground_contours, hole_contours = _filter_contours(contours, hierarchy, filter_params)  # Necessary for filtering out artifacts
 
@@ -197,7 +223,17 @@ class WholeSlideImage(object):
             top_left = (0,0)
             region_size = self.level_dim[vis_level]
 
-        img = np.array(self.wsi.read_region(top_left, vis_level, region_size).convert("RGB"))
+        # img = np.array(self.wsi.read_region(top_left, vis_level, region_size).convert("RGB"))
+        region_width, region_height = region_size
+        region_left, region_top = top_left
+        dsp_width, dsp_height = self.level_downsamples[vis_level]
+        region_left = int(region_left//dsp_width)
+        region_top = int(region_top//dsp_height)   
+        
+        if isinstance(self.wsi_zarr, zarr.hierarchy.Group):
+            img = self.wsi_zarr[vis_level][region_top:(region_top+region_height), region_left:(region_left+region_width), :]
+        elif isinstance(self.wsi_zarr, zarr.core.Array):
+            img = self.wsi_zarr[region_top:(region_top+region_height), region_left:(region_left+region_width), :]
         
         if not view_slide_only:
             offset = tuple(-(np.array(top_left) * scale).astype(int))
@@ -316,7 +352,15 @@ class WholeSlideImage(object):
                     continue    
                 
                 count+=1
-                patch_PIL = self.wsi.read_region((x,y), patch_level, (patch_size, patch_size)).convert('RGB')
+                # patch_PIL = self.wsi.read_region((x,y), patch_level, (patch_size, patch_size)).convert('RGB')
+                region_width, region_height = patch_size, patch_size
+                region_left, region_top = x, y
+                dsp_width, dsp_height = self.level_downsamples[patch_level]
+                region_left = int(region_left//dsp_width)
+                region_top = int(region_top//dsp_height)   
+                patch_PIL = Image.fromarray(self.wsi_zarr[patch_level][region_top:(region_top+region_height), \
+                                                                       region_left:(region_left+region_width), :])
+                
                 if custom_downsample > 1:
                     patch_PIL = patch_PIL.resize((target_patch_size, target_patch_size))
                 
@@ -345,7 +389,7 @@ class WholeSlideImage(object):
     def isInContours(cont_check_fn, pt, holes=None, patch_size=256):
         if cont_check_fn(pt):
             if holes is not None:
-                return not WholeSlideImage.isInHoles(holes, pt, patch_size)
+                return not WholeSlideImageTifffile.isInHoles(holes, pt, patch_size)
             else:
                 return 1
         return 0
@@ -360,12 +404,12 @@ class WholeSlideImage(object):
 
     def _assertLevelDownsamples(self):
         level_downsamples = []
-        dim_0 = self.wsi.level_dimensions[0]
+        dim_0 = self.level_dim[0]
         
-        for downsample, dim in zip(self.wsi.level_downsamples, self.wsi.level_dimensions):
+        for dim in self.level_dim:
             estimated_downsample = (dim_0[0]/float(dim[0]), dim_0[1]/float(dim[1]))
-            level_downsamples.append(estimated_downsample) if estimated_downsample != (downsample, downsample) else level_downsamples.append((downsample, downsample))
-        
+            level_downsamples.append(estimated_downsample)
+
         return level_downsamples
 
     def process_contours(self, save_path, patch_level=0, patch_size=256, step_size=256, **kwargs):
@@ -454,7 +498,7 @@ class WholeSlideImage(object):
         pool = mp.Pool(num_workers)
 
         iterable = [(coord, contour_holes, ref_patch_size[0], cont_check_fn) for coord in coord_candidates]
-        results = pool.starmap(WholeSlideImage.process_coord_candidate, iterable)
+        results = pool.starmap(WholeSlideImageTifffile.process_coord_candidate, iterable)
         pool.close()
         results = np.array([result for result in results if result is not None])
         
@@ -479,7 +523,7 @@ class WholeSlideImage(object):
 
     @staticmethod
     def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
-        if WholeSlideImage.isInContours(cont_check_fn, coord, contour_holes, ref_patch_size):
+        if WholeSlideImageTifffile.isInContours(cont_check_fn, coord, contour_holes, ref_patch_size):
             return coord
         else:
             return None
@@ -519,7 +563,8 @@ class WholeSlideImage(object):
         """
 
         if vis_level < 0:
-            vis_level = self.wsi.get_best_level_for_downsample(32)
+            # vis_level = self.wsi.get_best_level_for_downsample(32)
+            vis_level = len(self.level_downsamples) - 1
 
         downsample = self.level_downsamples[vis_level]
         scale = [1/downsample[0], 1/downsample[1]] # Scaling from 0 to desired level
@@ -609,13 +654,19 @@ class WholeSlideImage(object):
         
         if not blank_canvas:
             # downsample original image and use as canvas
-            img = np.array(self.wsi.read_region(top_left, vis_level, region_size).convert("RGB"))
+            # img = np.array(self.wsi.read_region(top_left, vis_level, region_size).convert("RGB"))
+            region_width, region_height = region_size
+            region_left, region_top = top_left
+            dsp_width, dsp_height = self.level_downsamples[vis_level]
+            region_left = int(region_left//dsp_width)
+            region_top = int(region_top//dsp_height)   
+            img = self.wsi_zarr[vis_level][region_top:(region_top+region_height), \
+                                                        region_left:(region_left+region_width), :]
         else:
             # use blank canvas
             img = np.array(Image.new(size=region_size, mode="RGB", color=(255,255,255))) 
 
-        # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/raw_img_demo.png", img)
-
+        # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/raw_img.png", img)
         #return Image.fromarray(img) #raw image
 
         print('\ncomputing heatmap image')
@@ -679,7 +730,7 @@ class WholeSlideImage(object):
     
     def block_blending(self, img, vis_level, top_left, bot_right, alpha=0.5, blank_canvas=False, block_size=1024):
         print('\ncomputing blend')
-        # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/org_img_demo.png", img)
+        # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/org_img.png", img)
         downsample = self.level_downsamples[vis_level]
         w = img.shape[1]
         h = img.shape[0]
@@ -710,19 +761,32 @@ class WholeSlideImage(object):
                 
                 if not blank_canvas:
                     # 4. read actual wsi block as canvas block
-                    
+                    print("not blank canvas")
                     pt = (x_start, y_start)
-                    canvas = np.array(self.wsi.read_region(pt, vis_level, blend_block_size).convert("RGB"))     
-                    
-                    print("debug:", blend_block_size, pt, self.wsi.level_dimensions[vis_level], 'canvas shape', canvas.shape)
+                    # canvas = np.array(self.wsi.read_region(pt, vis_level, blend_block_size).convert("RGB"))     
+                    region_width, region_height = blend_block_size
+                    region_left, region_top = pt
+                    dsp_width, dsp_height = self.level_downsamples[vis_level]
+                    region_left = int(region_left//dsp_width)
+                    region_top = int(region_top//dsp_height)                    
+
+                    print(blend_block_size, pt, self.wsi_zarr[vis_level].shape)
+                    canvas = self.wsi_zarr[vis_level][region_top:(region_top+region_height), \
+                                                      region_left:(region_left+region_width), :]
+                    canvas = canvas.copy()
+
                     print(np.unique(canvas), canvas.dtype, canvas.shape)
                     print(np.unique(canvas.reshape(-1, canvas.shape[2]), axis=0))
-                    # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/canvas_demo.png", canvas)
+                    # cv2.imwrite("/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/libs/CLAM/heatmaps/results/canvas.png", canvas)
                 else:
                     # 4. OR create blank canvas block
+                    print("blank canvas")
                     canvas = np.array(Image.new(size=blend_block_size, mode="RGB", color=(255,255,255)))
 
+                print("Canvas Data Type:", type(canvas))
                 # 5. blend color block and canvas block
+                print(blend_block.shape, canvas.shape)
+                print(img[y_start_img:y_end_img, x_start_img:x_end_img].shape)
                 img[y_start_img:y_end_img, x_start_img:x_end_img] = cv2.addWeighted(blend_block, alpha, canvas, 1 - alpha, 0, canvas)
         return img
 

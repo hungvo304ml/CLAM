@@ -9,9 +9,9 @@ from utils.utils import *
 from PIL import Image
 from math import floor
 import matplotlib.pyplot as plt
-from datasets.wsi_dataset import Wsi_Region
+from datasets.wsi_dataset_Tifffile import Wsi_Region
 import h5py
-from wsi_core.WholeSlideImage import WholeSlideImage
+from wsi_core.WholeSlideImageTifffile import WholeSlideImageTifffile
 from scipy.stats import percentileofscore
 import math
 from utils.file_utils import save_hdf5
@@ -25,20 +25,22 @@ def score2percentile(score, ref):
 
 def drawHeatmap(scores, coords, slide_path=None, wsi_object=None, vis_level = -1, **kwargs):
     if wsi_object is None:
-        wsi_object = WholeSlideImage(slide_path)
+        wsi_object = WholeSlideImageTifffile(slide_path)
         print(wsi_object.name)
     
     wsi = wsi_object.getOpenSlide()
     if vis_level < 0:
-        vis_level = wsi.get_best_level_for_downsample(32)
+        # vis_level = wsi.get_best_level_for_downsample(32)
+        vis_level = len(wsi_object.level_downsamples) - 1
     
     heatmap = wsi_object.visHeatmap(scores=scores, coords=coords, vis_level=vis_level, **kwargs)
     return heatmap
 
 def initialize_wsi(wsi_path, seg_mask_path=None, seg_params=None, filter_params=None):
-    wsi_object = WholeSlideImage(wsi_path)
+    wsi_object = WholeSlideImageTifffile(wsi_path)
     if seg_params['seg_level'] < 0:
-        best_level = wsi_object.wsi.get_best_level_for_downsample(32)
+        # best_level = wsi_object.wsi.get_best_level_for_downsample(32)
+        best_level = len(wsi_object.level_downsamples) - 1
         seg_params['seg_level'] = best_level
 
     wsi_object.segmentTissue(**seg_params, filter_params=filter_params)
@@ -62,7 +64,7 @@ def compute_from_patches(wsi_object, clam_pred=None, model=None, feature_extract
         coords = coords.numpy()
         
         with torch.no_grad():
-            features = feature_extractor(roi)
+            features = feature_extractor(roi.float())
 
             if attn_save_path is not None:
                 A = model(features, attention_only=True)

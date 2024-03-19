@@ -41,7 +41,7 @@ parser.add_argument('--fold', type=int, default=-1, help='single fold to evaluat
 parser.add_argument('--micro_average', action='store_true', default=False, 
                     help='use micro_average instead of macro_avearge for multiclass AUC')
 parser.add_argument('--split', type=str, choices=['train', 'val', 'test', 'all'], default='test')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_3_response_vs_nonresponse'])
 args = parser.parse_args()
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -99,6 +99,17 @@ elif args.task == 'task_2_tumor_subtyping':
 #                             label_dict = {'TCGA-KICH':0, 'TCGA-KIRC':1, 'TCGA-KIRP':2},
 #                             patient_strat= False,
 #                             ignore=['TCGA-SARC'])
+
+elif args.task == 'task_3_response_vs_nonresponse':
+    args.n_classes=2
+    dataset = Generic_MIL_Dataset(csv_path = '/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/data/processed_data/DAISY/dataset_anonymised.csv',
+                            data_dir= "/home/cougarnet.uh.edu/hqvo2/Projects/Spatial_Transcriptomics/data/processed_data/DAISY/features/",
+                            shuffle = False, 
+                            print_info = True,
+                            label_dict = {'NO':0, 'YES':1},
+                            label_col = 'label',
+                            patient_strat=False,
+                            ignore=[])
 
 else:
     raise NotImplementedError
