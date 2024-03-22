@@ -7,6 +7,7 @@ import math
 import re
 import pdb
 import pickle
+import cv2
 
 from torch.utils.data import Dataset, DataLoader, sampler
 from torchvision import transforms, utils, models
@@ -161,7 +162,10 @@ class Whole_Slide_Bag_FP(Dataset):
 
 		if self.target_patch_size is not None:		
 			img = np.resize(img, target_patch_size)
-								
+
+		if img.dtype == np.uint16:
+			img = cv2.convertScaleAbs(img)  
+
 		img = self.roi_transforms(img).unsqueeze(0)
 		return img, coord
 

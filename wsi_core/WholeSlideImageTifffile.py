@@ -164,15 +164,15 @@ class WholeSlideImageTifffile(object):
             img = self.wsi_zarr[0:region_height, 0:region_width, :]
         
         # TODO
-        if len(img.shape) == 3 and img.shape[0] == 3:
+        if img.shape[2] > img.shape[0]:
             img = np.transpose(img, [1, 2, 0])
-            cvuint8 = cv2.convertScaleAbs(image)
+            img = cv2.convertScaleAbs(img)
         
-
+        
         img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
         img_med = cv2.medianBlur(img_hsv[:,:,1], mthresh)  # Apply median blurring
         
-       
+        
         # Thresholding        
         if use_otsu:
             _, img_otsu = cv2.threshold(img_med, 0, sthresh_up, cv2.THRESH_OTSU+cv2.THRESH_BINARY)
@@ -235,11 +235,16 @@ class WholeSlideImageTifffile(object):
         elif isinstance(self.wsi_zarr, zarr.core.Array):
             img = self.wsi_zarr[region_top:(region_top+region_height), region_left:(region_left+region_width), :]
         
+        if img.shape[2] > img.shape[0]:
+            img = np.transpose(img, [1, 2, 0])
+            img = cv2.convertScaleAbs(img)                
+        
+
         if not view_slide_only:
             offset = tuple(-(np.array(top_left) * scale).astype(int))
             line_thickness = int(line_thickness * math.sqrt(scale[0] * scale[1]))
             if self.contours_tissue is not None and seg_display:
-                if not number_contours:
+                if not number_contours:                   
                     cv2.drawContours(img, self.scaleContourDim(self.contours_tissue, scale), 
                                      -1, color, line_thickness, lineType=cv2.LINE_8, offset=offset)
 

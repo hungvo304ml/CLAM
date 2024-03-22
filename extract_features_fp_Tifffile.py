@@ -15,7 +15,7 @@ from utils.utils import print_network, collate_features
 from utils.file_utils import save_hdf5
 from PIL import Image
 import h5py
-import openslide
+# import openslide
 import tifffile
 import zarr
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -37,6 +37,7 @@ def compute_w_loader(file_path, output_path, wsi_object, model,
 	dataset = Whole_Slide_Bag_FP(file_path=file_path, wsi_object=wsi_object, pretrained=pretrained, 
 		custom_downsample=custom_downsample, target_patch_size=target_patch_size)
 	x, y = dataset[0]
+	
 	kwargs = {'num_workers': 4, 'pin_memory': True} if device.type == "cuda" else {}
 	loader = DataLoader(dataset=dataset, batch_size=batch_size, **kwargs, collate_fn=collate_features)
 
